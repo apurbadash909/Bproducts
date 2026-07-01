@@ -7,10 +7,11 @@ Run with:
 """
 
 import os
-import subprocess
 import pandas as pd
 import streamlit as st
 import plotly.express as px
+
+from generate_data import generate_dataset
 
 # ----------------------------------------------------------------------
 # Page config
@@ -22,21 +23,41 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-DATA_PATH = "data/beauty_products.csv"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_PATH = os.path.join(APP_DIR, "data", "beauty_products.csv")
 
 
 # ----------------------------------------------------------------------
-# Data loading (auto-generate if missing)
+# Data loading
 # ----------------------------------------------------------------------
+# Generates the dataset in-memory (no subprocess call, no dependency on a
+# writable filesystem). This is required for platforms like Streamlit
+# Community Cloud where the app's source directory is often read-only.
 @st.cache_data
-def load_data(path: str) -> pd.DataFrame:
-    if not os.path.exists(path):
-        subprocess.run(["python3", "generate_data.py"], check=True)
-    df = pd.read_csv(path, parse_dates=["OrderDate"])
+def load_data(path: str, seed: int = 42) -> pd.DataFrame:
+    if os.path.exists(path):
+        try:
+            return pd.read_csv(path, parse_dates=["OrderDate"])
+        except Exception:
+            pass  # fall through to in-memory generation
+
+    df = generate_dataset(seed=seed)
+    df["OrderDate"] = pd.to_datetime(df["OrderDate"])
+
+    # Best-effort cache to disk; ignore failures on read-only deployments.
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        df.to_csv(path, index=False)
+    except OSError:
+        pass
+
     return df
 
 
-df = load_data(DATA_PATH)
+if "data_seed" not in st.session_state:
+    st.session_state.data_seed = 42
+
+df = load_data(DATA_PATH, seed=st.session_state.data_seed)
 
 # ----------------------------------------------------------------------
 # Sidebar filters
@@ -76,7 +97,8 @@ cruelty_free_only = st.sidebar.checkbox("Cruelty-free only", value=False)
 
 st.sidebar.markdown("---")
 if st.sidebar.button("🔄 Regenerate synthetic data"):
-    subprocess.run(["python3", "generate_data.py"], check=True)
+    import random
+    st.session_state.data_seed = random.randint(0, 1_000_000)
     st.cache_data.clear()
     st.rerun()
 
